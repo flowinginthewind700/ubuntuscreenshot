@@ -1,0 +1,15 @@
+--- a/src/platform/linux/wayland/client.rs
++++ b/src/platform/linux/wayland/client.rs
+@@ -167,6 +167,12 @@ struct InProgressOutput {
+     }
+ }
+ 
++/// Wrapper for actual WlOutput protocol object
++#[derive(Clone)]
++pub(crate) struct WaylandOutput {
++    pub wl_output: wl_output::WlOutput,
++}
++
+ pub struct Output {
+     pub name: Option<String>,
+     pub scale: i32,
