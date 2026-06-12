@@ -18,6 +18,8 @@ if ! command -v "$GH" >/dev/null 2>&1; then
 fi
 
 "$GH" auth status >/dev/null
+"$GH" auth setup-git
+git remote set-url origin "https://github.com/${REPO}.git"
 
 echo "==> 构建 release 二进制"
 cargo build --release
