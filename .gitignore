@@ -1,5 +1,9 @@
 /target/
 /dist/
+.build-deps/
+
+# 本机生成的 bindgen/clang 路径（scripts/write-cargo-env.sh）
+.cargo/config.toml
 .claude/
 **/*.rs.bk
 *.pdb

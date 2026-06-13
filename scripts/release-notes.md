@@ -8,24 +8,32 @@
 
 微信式 GNOME/Wayland 截屏工具：托盘触发、双屏框选、放大镜、选区内标注、复制/保存。
 
+#### 本版亮点（0.2.6）
+
+- **推荐安装 `.deb` 包**，依赖自动补齐，从应用菜单启动与命令行体验一致
+- **双层 Wayland 取帧**：优先静默 portal 截全屏 → 直接进入自有 overlay；失败时 PipeWire 回退
+- 修复安装版托盘截屏权限与焦点问题（`app_id`、capture gate）
+- 不依赖 `gnome-screenshot`，不使用 GNOME 自带截屏 UI
+
 #### 下载
 
-- `screenshot4ubuntu-x86_64-unknown-linux-gnu.tar.gz` — Linux x86_64 预编译包
+| 文件 | 说明 |
+|------|------|
+| `ubuntuscreenshot_0.2.6_amd64.deb` | **推荐** — Ubuntu/Debian 一键安装 |
+| `screenshot4ubuntu-x86_64-unknown-linux-gnu.tar.gz` | 预编译二进制 + README |
 
-#### 安装
+#### 安装（.deb）
 
 ```bash
-sudo apt install -y libxcb1 libxkbcommon0 libxkbcommon-x11-0 \
-  xdg-desktop-portal xdg-desktop-portal-gnome x11-xserver-utils \
-  zenity libayatana-appindicator3-1
-tar -xzf screenshot4ubuntu-x86_64-unknown-linux-gnu.tar.gz
-chmod +x screenshot4ubuntu
-./screenshot4ubuntu
+sudo dpkg -i ubuntuscreenshot_0.2.6_amd64.deb
+sudo apt-get install -f
 ```
+
+从应用菜单启动 **Ubuntu 截屏**，顶栏点相机图标 → **截屏**。
 
 #### 使用
 
-1. 顶栏点击相机图标 → **截屏**
+1. 顶栏相机图标 → **截屏**
 2. 拖拽框选（可跨双屏）→ 标注 → **复制** 或 **保存**
 3. `Esc` 取消
 
@@ -37,24 +45,32 @@ chmod +x screenshot4ubuntu
 
 WeChat-style GNOME/Wayland screenshot tool: tray launcher, dual-monitor selection, magnifier, in-place annotations, copy/save.
 
+#### Highlights (0.2.6)
+
+- **`.deb` package recommended** — auto-installs dependencies; app menu launch matches CLI behavior
+- **Dual-layer Wayland capture**: silent portal screenshot first → own overlay; PipeWire fallback on failure
+- Fixed tray/permission issues for installed builds
+- No `gnome-screenshot` or GNOME built-in screenshot UI
+
 #### Download
 
-- `screenshot4ubuntu-x86_64-unknown-linux-gnu.tar.gz` — prebuilt Linux x86_64 package
+| File | Description |
+|------|-------------|
+| `ubuntuscreenshot_0.2.6_amd64.deb` | **Recommended** — one-click install for Ubuntu/Debian |
+| `screenshot4ubuntu-x86_64-unknown-linux-gnu.tar.gz` | Prebuilt binary + README |
 
-#### Install
+#### Install (.deb)
 
 ```bash
-sudo apt install -y libxcb1 libxkbcommon0 libxkbcommon-x11-0 \
-  xdg-desktop-portal xdg-desktop-portal-gnome x11-xserver-utils \
-  zenity libayatana-appindicator3-1
-tar -xzf screenshot4ubuntu-x86_64-unknown-linux-gnu.tar.gz
-chmod +x screenshot4ubuntu
-./screenshot4ubuntu
+sudo dpkg -i ubuntuscreenshot_0.2.6_amd64.deb
+sudo apt-get install -f
 ```
+
+Launch **Ubuntu Screenshot** from the app menu, then **Screenshot** from the tray.
 
 #### Usage
 
-1. Click the camera icon in the tray → **Screenshot**
+1. Tray camera icon → **Screenshot**
 2. Drag to select (across monitors) → annotate → **Copy** or **Save**
 3. `Esc` to cancel
 

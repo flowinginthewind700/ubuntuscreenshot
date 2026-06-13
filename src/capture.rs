@@ -1,9 +1,10 @@
 use crate::desktop_layout::VirtualDesktop;
 use crate::model::CaptureFrame;
+use crate::screencast;
+use crate::util::debug_log;
 use image::RgbaImage;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Command;
 
 pub fn capture_primary_screen() -> anyhow::Result<CaptureFrame> {
     let layout = VirtualDesktop::detect();
@@ -19,209 +20,44 @@ pub fn capture_primary_screen() -> anyhow::Result<CaptureFrame> {
 }
 
 fn capture_wayland(layout: Option<&VirtualDesktop>) -> anyhow::Result<CaptureFrame> {
-    // GNOME Wayland 下第三方应用通常无法直接调用 Shell.Screenshot（AccessDenied），
-    // xdg-desktop-portal 是最可靠的整屏截屏方式。
-    if let Some(layout) = layout {
-        if let Ok(frame) = capture_freedesktop_portal(layout) {
-            return Ok(frame);
-        }
-        if let Ok(frame) = capture_gnome_desktop(layout) {
-            return Ok(frame);
-        }
-    }
-    capture_gnome_shell(layout).or_else(|gnome_err| {
-        capture_freedesktop_portal_legacy(layout).map_err(|portal_err| {
-            anyhow::anyhow!("GNOME Shell 截屏失败: {gnome_err}; Portal 截屏失败: {portal_err}")
-        })
-    })
-}
+    debug_log(&format!("capture_wayland: layout={layout:?}"));
+    let layout = layout.ok_or_else(|| anyhow::anyhow!("无法检测显示器布局"))?;
 
-fn capture_gnome_desktop(layout: &VirtualDesktop) -> anyhow::Result<CaptureFrame> {
-    if let Ok(img) = capture_full_desktop_image(layout) {
-        if img.width() == layout.width && img.height() == layout.height {
-            return Ok(frame_from_image(img, layout));
+    // 1) 与 v0.1.0 相同：静默 portal 截全屏，不弹 GNOME 选屏/共享界面，直接进入自有 overlay
+    let img = match capture_portal_screenshot_silent() {
+        Ok(img) => {
+            debug_log(&format!(
+                "capture: silent portal ok {}x{}",
+                img.width(),
+                img.height()
+            ));
+            img
         }
-        eprintln!(
-            "整屏截屏尺寸 {}x{} 与虚拟桌面 {}x{} 不一致",
-            img.width(),
-            img.height(),
-            layout.width,
-            layout.height
-        );
+        Err(portal_err) => {
+            debug_log(&format!(
+                "capture: silent portal failed ({portal_err:#}), fallback pipewire"
+            ));
+            screencast::capture_desktop_with_retry(layout)?
+        }
+    };
+
+    if img.width() == layout.width && img.height() == layout.height {
+        return Ok(frame_from_image(img, layout));
     }
+
+    eprintln!(
+        "截屏尺寸 {}x{} 与虚拟桌面 {}x{} 不一致，逐屏裁剪",
+        img.width(),
+        img.height(),
+        layout.width,
+        layout.height
+    );
 
     if layout.monitors.len() > 1 {
-        if let Ok(frame) = capture_gnome_stitch(layout) {
-            return Ok(frame);
-        }
+        return Ok(stitch_from_full(&img, layout));
     }
 
-    if let Ok(img) = capture_gnome_area(layout.x, layout.y, layout.width, layout.height, layout) {
-        if img.width() == layout.width && img.height() == layout.height {
-            return Ok(frame_from_image(img, layout));
-        }
-    }
-
-    anyhow::bail!("GNOME 虚拟桌面截屏失败")
-}
-
-fn capture_full_desktop_image(layout: &VirtualDesktop) -> anyhow::Result<RgbaImage> {
-    if let Ok(img) = capture_gnome_screenshot_cli() {
-        if img.width() == layout.width && img.height() == layout.height {
-            return Ok(img);
-        }
-    }
-
-    if let Ok(img) = capture_gnome_shell_image() {
-        if img.width() == layout.width && img.height() == layout.height {
-            return Ok(img);
-        }
-    }
-
-    // 关键：portal 在 GNOME Wayland 下可获取完整虚拟桌面，供逐屏裁剪拼接使用
-    if let Ok(img) = capture_portal_image() {
-        if img.width() == layout.width && img.height() == layout.height {
-            return Ok(img);
-        }
-    }
-
-    anyhow::bail!("无法获取完整虚拟桌面截图")
-}
-
-fn capture_gnome_screenshot_cli() -> anyhow::Result<RgbaImage> {
-    let path = temp_png_path()?;
-    let output = Command::new("gnome-screenshot")
-        .arg("-f")
-        .arg(&path)
-        .output()
-        .map_err(|e| anyhow::anyhow!("无法执行 gnome-screenshot: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("gnome-screenshot 失败: {stderr}");
-    }
-    let img = image::open(&path)?.into_rgba8();
-    let _ = std::fs::remove_file(&path);
-    Ok(img)
-}
-
-fn capture_gnome_shell_image() -> anyhow::Result<RgbaImage> {
-    let conn = zbus::blocking::Connection::session()?;
-    let proxy = zbus::blocking::Proxy::new(
-        &conn,
-        "org.gnome.Shell.Screenshot",
-        "/org/gnome/Shell/Screenshot",
-        "org.gnome.Shell.Screenshot",
-    )?;
-
-    let path = temp_png_path()?;
-    let filename = path.to_string_lossy().to_string();
-    proxy.call_method("Screenshot", &(false, false, filename))?;
-    let img = image::open(&path)?.into_rgba8();
-    let _ = std::fs::remove_file(&path);
-    Ok(img)
-}
-
-fn capture_gnome_stitch(layout: &VirtualDesktop) -> anyhow::Result<CaptureFrame> {
-    let mut canvas = RgbaImage::new(layout.width, layout.height);
-    for monitor in &layout.monitors {
-        let piece = capture_gnome_area(monitor.x, monitor.y, monitor.width, monitor.height, layout)
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "显示器 {}x{}@({},{}) 截屏失败: {e}",
-                    monitor.width,
-                    monitor.height,
-                    monitor.x,
-                    monitor.y
-                )
-            })?;
-        if piece.width() != monitor.width || piece.height() != monitor.height {
-            anyhow::bail!(
-                "显示器 {}x{}@({},{}) 截图片尺寸 {}x{} 不匹配",
-                monitor.width,
-                monitor.height,
-                monitor.x,
-                monitor.y,
-                piece.width(),
-                piece.height()
-            );
-        }
-        image::imageops::overlay(
-            &mut canvas,
-            &piece,
-            (monitor.x - layout.x) as i64,
-            (monitor.y - layout.y) as i64,
-        );
-    }
-    Ok(frame_from_image(canvas, layout))
-}
-
-fn capture_gnome_area(
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-    layout: &VirtualDesktop,
-) -> anyhow::Result<RgbaImage> {
-    match capture_gnome_area_dbus(x, y, width, height) {
-        Ok(img) => Ok(img),
-        Err(e) if e.to_string().contains("AccessDenied") => {
-            let full = capture_full_desktop_image(layout)?;
-            Ok(crop_desktop_region(&full, layout, x, y, width, height))
-        }
-        Err(e) => Err(e),
-    }
-}
-
-fn capture_gnome_area_dbus(
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-) -> anyhow::Result<RgbaImage> {
-    let conn = zbus::blocking::Connection::session()?;
-    let proxy = zbus::blocking::Proxy::new(
-        &conn,
-        "org.gnome.Shell.Screenshot",
-        "/org/gnome/Shell/Screenshot",
-        "org.gnome.Shell.Screenshot",
-    )?;
-
-    let path = temp_png_path()?;
-    let filename = path.to_string_lossy().to_string();
-    proxy.call_method(
-        "ScreenshotArea",
-        &(x, y, width as i32, height as i32, false, filename),
-    )?;
-    let img = image::open(&path)?.into_rgba8();
-    let _ = std::fs::remove_file(&path);
-    Ok(img)
-}
-
-fn crop_desktop_region(
-    full: &RgbaImage,
-    layout: &VirtualDesktop,
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-) -> RgbaImage {
-    let ox = (x - layout.x).max(0) as u32;
-    let oy = (y - layout.y).max(0) as u32;
-    let w = width.min(full.width().saturating_sub(ox));
-    let h = height.min(full.height().saturating_sub(oy));
-    image::imageops::crop_imm(full, ox, oy, w, h).to_image()
-}
-
-fn capture_gnome_shell(layout: Option<&VirtualDesktop>) -> anyhow::Result<CaptureFrame> {
-    let img = capture_gnome_shell_image()?;
-    let (origin_x, origin_y) = layout.map(|l| (l.x, l.y)).unwrap_or((0, 0));
-    Ok(CaptureFrame {
-        width: img.width(),
-        height: img.height(),
-        origin_x,
-        origin_y,
-        pixels: img.into_raw(),
-    })
+    Ok(frame_from_image(img, layout))
 }
 
 #[derive(zbus::zvariant::DeserializeDict, zbus::zvariant::Type, Debug)]
@@ -230,40 +66,8 @@ struct PortalScreenshotResponse {
     uri: String,
 }
 
-fn capture_freedesktop_portal(layout: &VirtualDesktop) -> anyhow::Result<CaptureFrame> {
-    let img = capture_portal_image()?;
-    if img.width() == layout.width && img.height() == layout.height {
-        return Ok(frame_from_image(img, layout));
-    }
-
-    eprintln!(
-        "Portal 截屏尺寸 {}x{} 与虚拟桌面 {}x{} 不一致，尝试逐屏拼接",
-        img.width(),
-        img.height(),
-        layout.width,
-        layout.height
-    );
-
-    if layout.monitors.len() > 1 {
-        return capture_gnome_stitch(layout);
-    }
-
-    Ok(frame_from_image(img, layout))
-}
-
-fn capture_freedesktop_portal_legacy(layout: Option<&VirtualDesktop>) -> anyhow::Result<CaptureFrame> {
-    let img = capture_portal_image()?;
-    let (origin_x, origin_y) = layout.map(|l| (l.x, l.y)).unwrap_or((0, 0));
-    Ok(CaptureFrame {
-        width: img.width(),
-        height: img.height(),
-        origin_x,
-        origin_y,
-        pixels: img.into_raw(),
-    })
-}
-
-fn capture_portal_image() -> anyhow::Result<RgbaImage> {
+/// v0.1.0 静默截屏：`interactive=false`，不唤起 GNOME 自带截屏/共享界面。
+fn capture_portal_screenshot_silent() -> anyhow::Result<RgbaImage> {
     let path = capture_portal_png_path()?;
     let img = image::open(&path)?.into_rgba8();
     let _ = std::fs::remove_file(&path);
@@ -279,9 +83,7 @@ fn capture_portal_png_path() -> anyhow::Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("无法获取 DBus unique name"))?
         .trim_start_matches(':')
         .replace('.', "_");
-    let request_path = format!(
-        "/org/freedesktop/portal/desktop/request/{unique}/{handle_token}"
-    );
+    let request_path = format!("/org/freedesktop/portal/desktop/request/{unique}/{handle_token}");
 
     let portal = zbus::blocking::Proxy::new(
         &conn,
@@ -295,6 +97,7 @@ fn capture_portal_png_path() -> anyhow::Result<PathBuf> {
     options.insert("modal", zbus::zvariant::Value::from(false));
     options.insert("interactive", zbus::zvariant::Value::from(false));
 
+    debug_log(&format!("portal Screenshot requested (silent): {request_path}"));
     portal.call_method("Screenshot", &("", options))?;
 
     let rule = format!(
@@ -317,6 +120,7 @@ fn capture_portal_png_path() -> anyhow::Result<PathBuf> {
         }
     };
 
+    debug_log(&format!("portal screenshot uri: {}", response.uri));
     uri_to_path(&response.uri)
 }
 
@@ -329,11 +133,40 @@ fn uri_to_path(uri: &str) -> anyhow::Result<PathBuf> {
     Ok(PathBuf::from(uri))
 }
 
-fn temp_png_path() -> anyhow::Result<PathBuf> {
-    let dir = std::env::temp_dir().join("screenshot4ubuntu");
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("cap_{}.png", std::process::id()));
-    Ok(path)
+fn stitch_from_full(full: &RgbaImage, layout: &VirtualDesktop) -> CaptureFrame {
+    let mut canvas = RgbaImage::new(layout.width, layout.height);
+    for monitor in &layout.monitors {
+        let piece = crop_desktop_region(
+            full,
+            layout,
+            monitor.x,
+            monitor.y,
+            monitor.width,
+            monitor.height,
+        );
+        image::imageops::overlay(
+            &mut canvas,
+            &piece,
+            (monitor.x - layout.x) as i64,
+            (monitor.y - layout.y) as i64,
+        );
+    }
+    frame_from_image(canvas, layout)
+}
+
+fn crop_desktop_region(
+    full: &RgbaImage,
+    layout: &VirtualDesktop,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> RgbaImage {
+    let ox = (x - layout.x).max(0) as u32;
+    let oy = (y - layout.y).max(0) as u32;
+    let w = width.min(full.width().saturating_sub(ox));
+    let h = height.min(full.height().saturating_sub(oy));
+    image::imageops::crop_imm(full, ox, oy, w, h).to_image()
 }
 
 fn frame_from_image(img: RgbaImage, layout: &VirtualDesktop) -> CaptureFrame {

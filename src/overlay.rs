@@ -8,7 +8,7 @@ use crate::model::{
     Annotation, CaptureFrame, Phase, Tool, COLORS, DEFAULT_STROKE, DEFAULT_TEXT_SIZE,
     STROKE_WIDTHS, TEXT_SIZES, stroke_width_label, text_size_label,
 };
-use crate::util::px_val;
+use crate::util::{desktop_app_id, px_val};
 use gpui::{
     AnyWindowHandle, App, Bounds, Context, Corners, Entity, FocusHandle, Focusable, Global,
     Hsla, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, PathBuilder, SharedString,
@@ -42,6 +42,23 @@ impl Global for OverlaySession {}
 pub struct CaptureInProgress(pub bool);
 
 impl Global for CaptureInProgress {}
+
+/// 记录截屏开始时间，用于清除卡死的 busy 状态（见 capture_flow）。
+pub(crate) struct CaptureBusy {
+    pub active: bool,
+    pub since: Option<std::time::Instant>,
+}
+
+impl Default for CaptureBusy {
+    fn default() -> Self {
+        Self {
+            active: false,
+            since: None,
+        }
+    }
+}
+
+impl Global for CaptureBusy {}
 
 pub struct OverlayCore {
     frame: CaptureFrame,
@@ -186,6 +203,7 @@ impl OverlayCore {
         self.ready_at = None;
         cx.update_global::<OverlaySession, _>(|session, _| session.active = None);
         cx.update_global::<CaptureInProgress, _>(|busy, _| busy.0 = false);
+        cx.update_global::<CaptureBusy, _>(|state, _| *state = CaptureBusy::default());
         // 须在帧结束后关闭，否则当前窗口仍在 update 栈上会关不掉
         cx.defer(move |cx| {
             for handle in handles {
@@ -1416,15 +1434,22 @@ fn open_monitor_window(
     cx.open_window(
         WindowOptions {
             titlebar: None,
-            window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+            window_bounds: Some(if wayland {
+                WindowBounds::Fullscreen(window_bounds)
+            } else {
+                WindowBounds::Windowed(window_bounds)
+            }),
             window_decorations: None,
             window_background: WindowBackgroundAppearance::Opaque,
-            kind: WindowKind::PopUp,
+            // PopUp 在 X11 下会被标记为 _NET_WM_WINDOW_TYPE_NOTIFICATION，
+            // 导致窗口管理器把它显示成角落里的一个小方块而不是全屏覆盖。
+            kind: WindowKind::Normal,
             is_movable: false,
             is_resizable: false,
             focus,
             show: true,
             display_id,
+            app_id: Some(desktop_app_id().into()),
             ..Default::default()
         },
         move |window, cx| {
@@ -1522,6 +1547,7 @@ pub fn open_overlay(frame: CaptureFrame, cx: &mut App) {
         active: Some(entity.downgrade()),
     });
     cx.update_global::<CaptureInProgress, _>(|busy, _| busy.0 = false);
+    cx.update_global::<CaptureBusy, _>(|state, _| *state = CaptureBusy::default());
 
     let primaries: Vec<_> = specs
         .iter()

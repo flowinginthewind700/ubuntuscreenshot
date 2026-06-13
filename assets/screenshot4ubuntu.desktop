@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=ubuntuscreenshot
+Comment=Screenshot tool for Ubuntu/GNOME
+Exec=/usr/bin/screenshot4ubuntu
+Icon=screenshot4ubuntu
+Terminal=false
+Type=Application
+Categories=Graphics;Utility;
+Keywords=screenshot;capture;screen;
+StartupNotify=true
+StartupWMClass=screenshot4ubuntu

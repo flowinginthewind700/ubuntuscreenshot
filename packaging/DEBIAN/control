@@ -1,0 +1,22 @@
+Package: ubuntuscreenshot
+Version: 0.2.6
+Section: utils
+Priority: extra
+Architecture: amd64
+Maintainer: flowinginthewind700
+Homepage: https://github.com/flowinginthewind700/ubuntuscreenshot
+Conflicts: screenshot4ubuntu
+Replaces: screenshot4ubuntu
+Description: Screenshot tool for Ubuntu/GNOME
+ A screenshot tool built with GPUI, designed for Ubuntu and GNOME desktops.
+ .
+ Features include:
+  - System tray integration with camera icon
+  - Multi-monitor support (dual screens)
+  - Region selection with magnifier
+  - In-selection annotation tools (pen, line, rectangle, ellipse, text)
+  - Adjustable brush size, font size, and colors
+  - Copy to clipboard or save to file
+  - Chinese/English language support
+Depends: libxcb1, libxkbcommon0, libxkbcommon-x11-0, xdg-desktop-portal, xdg-desktop-portal-gnome, x11-xserver-utils, zenity, libayatana-appindicator3-1, pipewire, libpipewire-0.3-0
+Installed-Size: 35896

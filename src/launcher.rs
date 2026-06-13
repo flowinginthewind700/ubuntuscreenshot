@@ -37,8 +37,20 @@ impl LauncherApp {
 
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(180));
-            let _ = tx.send(capture_primary_screen());
+            // 与 capture_flow.rs 保持一致：为 zbus blocking API 提供 Tokio runtime
+            // 上下文，但把同步截屏逻辑放在 spawn_blocking 中，避免嵌套 block_on。
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create tokio runtime for capture");
+
+            rt.block_on(async {
+                tokio::time::sleep(Duration::from_millis(180)).await;
+                let result = tokio::task::spawn_blocking(capture_primary_screen)
+                    .await
+                    .unwrap_or_else(|e| Err(anyhow::anyhow!("capture panicked: {e}")));
+                let _ = tx.send(result);
+            });
         });
 
         cx.spawn(async move |_, cx| {
@@ -117,7 +129,7 @@ impl Render for LauncherApp {
                             .text_xl()
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(rgb(TEXT))
-                            .child("Screenshot4Ubuntu"),
+                            .child("ubuntuscreenshot"),
                     )
                     .child(
                         div()
@@ -175,7 +187,7 @@ pub fn open_launcher(cx: &mut App) -> WindowHandle<LauncherApp> {
         .open_window(
             WindowOptions {
                 titlebar: Some(gpui::TitlebarOptions {
-                    title: Some("Screenshot4Ubuntu".into()),
+                    title: Some("ubuntuscreenshot".into()),
                     ..Default::default()
                 }),
                 window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),

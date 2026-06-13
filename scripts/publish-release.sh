@@ -21,11 +21,10 @@ fi
 "$GH" auth setup-git
 git remote set-url origin "https://github.com/${REPO}.git"
 
-echo "==> 构建 release 二进制"
-cargo build --release
+echo "==> 构建 release 二进制与 deb"
+bash "$ROOT/scripts/write-cargo-env.sh" 2>/dev/null || true
+bash "$ROOT/scripts/build-deb.sh"
 
-echo "==> 打包"
-mkdir -p dist
 cp target/release/screenshot4ubuntu dist/
 cp README.md LICENSE dist/
 tar -czf "dist/screenshot4ubuntu-x86_64-unknown-linux-gnu.tar.gz" -C dist \
@@ -44,7 +43,8 @@ echo "==> 创建 GitHub Release"
   --repo "$REPO" \
   --title "Ubuntu Screenshot ${TAG}" \
   --notes-file "$RELEASE_NOTES" \
-  "dist/screenshot4ubuntu-x86_64-unknown-linux-gnu.tar.gz"
+  "dist/screenshot4ubuntu-x86_64-unknown-linux-gnu.tar.gz" \
+  "dist/ubuntuscreenshot_${VERSION}_amd64.deb"
 
 rm -f "$RELEASE_NOTES"
 

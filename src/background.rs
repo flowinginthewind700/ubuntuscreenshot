@@ -1,8 +1,9 @@
+use crate::util::desktop_app_id;
 use gpui::{
     App, Bounds, Context, Window, WindowBounds, WindowOptions, div, point, prelude::*, px, size,
 };
 
-/// 托盘常驻模式下的隐藏窗口，防止关闭截屏层后 GPUI 事件循环退出。
+/// Hidden window to keep GPUI event loop running for tray-only mode.
 struct BackgroundApp;
 
 impl Render for BackgroundApp {
@@ -28,6 +29,7 @@ pub fn open_background_window(cx: &mut App) {
             focus: false,
             is_movable: false,
             is_resizable: false,
+            app_id: Some(desktop_app_id().into()),
             ..Default::default()
         },
         |_, cx| cx.new(|_| BackgroundApp),

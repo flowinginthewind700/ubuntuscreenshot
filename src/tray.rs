@@ -1,5 +1,6 @@
 use crate::capture_flow::start_capture;
 use crate::i18n::{self, Language, MessageKey, tr};
+use crate::util::debug_log;
 use gpui::{App, Timer};
 use ksni::blocking::TrayMethods;
 use std::sync::OnceLock;
@@ -30,11 +31,11 @@ impl ScreenshotTray {
 
 impl ksni::Tray for ScreenshotTray {
     fn id(&self) -> String {
-        "screenshot4ubuntu".into()
+        "ubuntuscreenshot".into()
     }
 
     fn title(&self) -> String {
-        "Screenshot4Ubuntu".into()
+        "ubuntuscreenshot".into()
     }
 
     fn icon_name(&self) -> String {
@@ -149,10 +150,13 @@ pub fn attach_tray_to_app(cx: &mut App, rx: Receiver<TrayCommand>) {
         loop {
             Timer::after(Duration::from_millis(150)).await;
             while let Ok(cmd) = rx.try_recv() {
-                let _ = cx.update(|app| match cmd {
-                    TrayCommand::Capture => start_capture(app),
-                    TrayCommand::SetLanguage(lang) => i18n::set_language(app, lang),
-                    TrayCommand::Quit => app.quit(),
+                debug_log(&format!("tray command: {cmd:?}"));
+                let _ = cx.update(|app| {
+                    app.defer(move |app| match cmd {
+                        TrayCommand::Capture => start_capture(app),
+                        TrayCommand::SetLanguage(lang) => i18n::set_language(app, lang),
+                        TrayCommand::Quit => app.quit(),
+                    });
                 });
             }
         }

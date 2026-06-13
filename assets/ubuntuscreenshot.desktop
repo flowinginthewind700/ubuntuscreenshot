@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Ubuntu Screenshot
+Name[zh_CN]=Ubuntu 截屏
+GenericName=Screenshot
+GenericName[zh_CN]=截屏工具
+Comment=WeChat-style screenshot tool for GNOME
+Comment[zh_CN]=微信式 GNOME 截屏工具
+Exec=/usr/bin/ubuntuscreenshot
+TryExec=/usr/bin/ubuntuscreenshot
+Icon=screenshot4ubuntu
+Terminal=false
+Categories=Utility;Graphics;
+StartupNotify=true
+StartupWMClass=ubuntuscreenshot
+Keywords=screenshot;capture;snip;截屏;截图;
