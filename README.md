@@ -33,10 +33,10 @@
 
 ### 快速安装（推荐）
 
-在 [Releases](https://github.com/flowinginthewind700/ubuntuscreenshot/releases) 下载 **`ubuntuscreenshot_0.2.6_amd64.deb`**，然后：
+在 [Releases](https://github.com/flowinginthewind700/ubuntuscreenshot/releases) 下载 **`ubuntuscreenshot_0.2.8_amd64.deb`**，然后：
 
 ```bash
-sudo dpkg -i ubuntuscreenshot_0.2.6_amd64.deb
+sudo dpkg -i ubuntuscreenshot_0.2.8_amd64.deb
 sudo apt-get install -f   # 自动补齐缺失依赖
 ```
 
@@ -73,7 +73,7 @@ sudo apt-get install -f   # 自动补齐缺失依赖
 - 语言偏好：`~/.config/screenshot4ubuntu/language`（`zh` 或 `en`）
 - 诊断日志：`~/.cache/ubuntuscreenshot/capture.log`
 
-### 截屏原理（v0.2.6）
+### 截屏原理（v0.2.8）
 
 点击「截屏」后的流程：
 
@@ -213,10 +213,10 @@ Repository: [github.com/flowinginthewind700/ubuntuscreenshot](https://github.com
 
 ### Quick Install (Recommended)
 
-Download **`ubuntuscreenshot_0.2.6_amd64.deb`** from [Releases](https://github.com/flowinginthewind700/ubuntuscreenshot/releases):
+Download **`ubuntuscreenshot_0.2.8_amd64.deb`** from [Releases](https://github.com/flowinginthewind700/ubuntuscreenshot/releases):
 
 ```bash
-sudo dpkg -i ubuntuscreenshot_0.2.6_amd64.deb
+sudo dpkg -i ubuntuscreenshot_0.2.8_amd64.deb
 sudo apt-get install -f
 ```
 
@@ -247,7 +247,7 @@ Then launch **Ubuntu Screenshot** from the app menu and click **Screenshot** fro
 - Language: `~/.config/screenshot4ubuntu/language` (`zh` or `en`)
 - Debug log: `~/.cache/ubuntuscreenshot/capture.log`
 
-### Capture Architecture (v0.2.6)
+### Capture Architecture (v0.2.8)
 
 ```
 Tray → silent full-screen capture → own overlay (mask / magnifier / selection / annotations)

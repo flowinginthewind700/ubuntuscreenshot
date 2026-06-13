@@ -27,62 +27,26 @@
 |------|------|
 | 操作系统 | Ubuntu 22.04+ / Debian 12+（其他带 GNOME 的发行版亦可尝试） |
 | 桌面会话 | **GNOME Wayland**（推荐）或 X11 |
-| 架构 | `x86_64`（当前 Release 构建目标） |
+| 架构 | `x86_64` |
 
-> 预编译二进制约 35MB，仍需安装下方**运行时系统包**（与是否从源码编译无关）。
+> 预编译包约 9MB（`.deb`）/ 35MB（二进制），安装后仍需系统运行时依赖（见下文）。
 
 ### 快速安装（推荐）
 
-**方式一：.deb 安装包（推荐）**
-
-1. 在 [Releases](https://github.com/flowinginthewind700/ubuntuscreenshot/releases) 下载 `ubuntuscreenshot_0.1.1_amd64.deb`
-2. 安装：
+在 [Releases](https://github.com/flowinginthewind700/ubuntuscreenshot/releases) 下载 **`ubuntuscreenshot_0.2.8_amd64.deb`**，然后：
 
 ```bash
-sudo dpkg -i ubuntuscreenshot_0.1.1_amd64.deb
-sudo apt-get install -f  # 自动安装缺失依赖
+sudo dpkg -i ubuntuscreenshot_0.2.8_amd64.deb
+sudo apt-get install -f   # 自动补齐缺失依赖
 ```
 
-安装完成后，在应用菜单中搜索 **Ubuntu Screenshot** 启动，顶栏出现相机图标后点击「截屏」。
+安装完成后：
 
-**方式二：手动安装**
+1. 在应用菜单搜索 **Ubuntu 截屏** / **Ubuntu Screenshot** 并启动
+2. 顶栏出现 **相机图标**
+3. 点击图标 → **截屏**
 
-**1. 下载**
-
-在 [Releases](https://github.com/flowinginthewind700/ubuntuscreenshot/releases) 下载最新版：
-
-- `screenshot4ubuntu-x86_64-unknown-linux-gnu.tar.gz`（Linux x86_64）
-
-**2. 安装运行时依赖**
-
-```bash
-sudo apt update
-sudo apt install -y \
-  libxcb1 \
-  libxkbcommon0 \
-  libxkbcommon-x11-0 \
-  xdg-desktop-portal \
-  xdg-desktop-portal-gnome \
-  x11-xserver-utils \
-  zenity \
-  libayatana-appindicator3-1
-```
-
-**3. 解压并运行**
-
-```bash
-tar -xzf screenshot4ubuntu-x86_64-unknown-linux-gnu.tar.gz
-chmod +x screenshot4ubuntu
-./screenshot4ubuntu
-```
-
-可选：安装到用户目录
-
-```bash
-mkdir -p ~/.local/bin
-cp screenshot4ubuntu ~/.local/bin/
-# 确保 ~/.local/bin 在 PATH 中
-```
+> `.deb` 会自动声明依赖；`apt-get install -f` 会安装 `pipewire`、`xdg-desktop-portal-gnome` 等必需组件。
 
 ### 使用说明
 
@@ -107,44 +71,31 @@ cp screenshot4ubuntu ~/.local/bin/
 
 - 截图默认保存目录：`~/Pictures/Screenshots/`
 - 语言偏好：`~/.config/screenshot4ubuntu/language`（`zh` 或 `en`）
+- 诊断日志：`~/.cache/ubuntuscreenshot/capture.log`
 
-### 从源码编译
+### 截屏原理（v0.2.8）
 
-**构建依赖**（仅编译时需要）：
+点击「截屏」后的流程：
 
-```bash
-sudo apt update
-sudo apt install -y \
-  build-essential pkg-config curl \
-  libpipewire-0.3-dev libspa-0.2-dev \
-  libxkbcommon-dev libwayland-dev libfontconfig-dev libdbus-1-dev \
-  libvulkan-dev libx11-dev libx11-xcb-dev libxcb-render0-dev libxcb-shape0-dev \
-  libxcb-xfixes0-dev libssl-dev \
-  libclang-dev libxcb1-dev libxrandr-dev libegl-dev
+```
+托盘触发 → 后台静默抓取全屏 → 立刻打开自有 overlay（遮罩 / 放大镜 / 框选 / 标注）
 ```
 
-若无 sudo，可一键准备本地编译依赖（无需 root）：
+Wayland 下采用**双层取帧**，保证命令行与安装版体验一致：
 
-```bash
-bash scripts/setup-build-deps.sh
-source .build-deps/env.sh   # 每次新终端编译前执行
-```
+| 优先级 | 方式 | 说明 |
+|--------|------|------|
+| 1 | `portal Screenshot`（`interactive=false`） | 静默截全屏，**不弹出** GNOME 自带截屏/选屏界面 |
+| 2 | ScreenCast + PipeWire | 静默截屏失败时的回退（常见于安装版首次无权限）；授权后通常不再弹窗 |
 
-安装 [Rust](https://rustup.rs/) 后：
+**不会**调用 `gnome-screenshot`，也**不会**用 GNOME 自带截屏 UI 替代本应用 overlay。
 
-```bash
-git clone https://github.com/flowinginthewind700/ubuntuscreenshot.git
-cd ubuntuscreenshot
-cargo build --release          # 或 ./scripts/run-dev.sh 自动加载依赖
-./target/release/screenshot4ubuntu
-```
-
-### 运行时依赖说明
+### 运行时依赖
 
 | 包名 | 用途 |
 |------|------|
-| `xdg-desktop-portal` + `xdg-desktop-portal-gnome` | ScreenCast portal（与微信/会议软件相同） |
-| `pipewire` + `libpipewire-0.3-0` | PipeWire 视频流取帧 |
+| `xdg-desktop-portal` + `xdg-desktop-portal-gnome` | Wayland 截屏 portal |
+| `pipewire` + `libpipewire-0.3-0` | PipeWire 回退取帧 |
 | `x11-xserver-utils` | `xrandr` 多显示器布局 |
 | `zenity` | 保存文件对话框 |
 | `libayatana-appindicator3-1` | 系统托盘图标 |
@@ -152,9 +103,57 @@ cargo build --release          # 或 ./scripts/run-dev.sh 自动加载依赖
 
 **不需要**：`gnome-screenshot`、`wl-clipboard`、Rust / Cargo（仅编译时需要）
 
-**编译依赖**：`libpipewire-0.3-dev`、`libspa-0.2-dev`
+手动安装依赖（非 `.deb` 时）：
 
-首次截屏若未授权，会弹出系统 **ScreenCast** 标准授权对话框（与微信/会议软件相同），授权后使用本应用自有 overlay 框选/标注。
+```bash
+sudo apt update
+sudo apt install -y \
+  libxcb1 libxkbcommon0 libxkbcommon-x11-0 \
+  xdg-desktop-portal xdg-desktop-portal-gnome \
+  pipewire libpipewire-0.3-0 \
+  x11-xserver-utils zenity libayatana-appindicator3-1
+```
+
+### 从源码编译
+
+**构建依赖**：
+
+```bash
+sudo apt update
+sudo apt install -y \
+  build-essential pkg-config \
+  libpipewire-0.3-dev libspa-0.2-dev libclang-dev \
+  libxkbcommon-dev libwayland-dev libfontconfig-dev libdbus-1-dev \
+  libvulkan-dev libx11-dev libx11-xcb-dev libxcb-render0-dev \
+  libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev \
+  libxcb1-dev libxrandr-dev libegl-dev
+```
+
+若无 sudo，可准备本地编译依赖：
+
+```bash
+bash scripts/setup-build-deps.sh
+bash scripts/write-cargo-env.sh
+source .build-deps/env.sh   # 或直接用 ./scripts/run-dev.sh
+```
+
+安装 [Rust](https://rustup.rs/) 后：
+
+```bash
+git clone https://github.com/flowinginthewind700/ubuntuscreenshot.git
+cd ubuntuscreenshot
+./scripts/run-dev.sh        # 开发运行
+# 或
+cargo build --release
+./target/release/screenshot4ubuntu
+```
+
+打 `.deb` 包：
+
+```bash
+bash scripts/build-deb.sh
+# 产物: dist/ubuntuscreenshot_<version>_amd64.deb
+```
 
 ### 常见问题
 
@@ -162,10 +161,13 @@ cargo build --release          # 或 ./scripts/run-dev.sh 自动加载依赖
 安装 `libayatana-appindicator3-1`，确认 GNOME 已启用 AppIndicator。
 
 **截屏失败 / 提示需要权限**  
-在系统弹窗中选择「允许」并共享屏幕，或在「设置 → 隐私 → 截屏」中开启 ubuntuscreenshot。确认 `xdg-desktop-portal-gnome` 已安装，且 `echo $XDG_SESSION_TYPE` 输出 `wayland`。
+在「设置 → 应用程序 → Ubuntu 截屏 → 截屏」中开启权限。确认 `xdg-desktop-portal-gnome` 已安装，且 `echo $XDG_SESSION_TYPE` 输出 `wayland`。查看 `~/.cache/ubuntuscreenshot/capture.log`。
+
+**出现「共享屏幕」系统弹窗**  
+说明静默截屏失败、走了 PipeWire 回退。在弹窗中选择显示器并点「分享」一次；之后应直接进入自有 overlay。
 
 **截屏失败 / 只有单屏**  
-多屏需要 `xrandr` 可用。
+多屏需要 `xrandr` 可用（`x11-xserver-utils`）。
 
 **保存无反应**  
 安装 `zenity`。
@@ -173,8 +175,8 @@ cargo build --release          # 或 ./scripts/run-dev.sh 自动加载依赖
 ### 技术栈
 
 - Rust + GPUI 0.2.2（`gpui-local`）
-- xdg-desktop-portal / zbus（Wayland 截屏）
-- x11rb（X11 截屏）
+- xdg-desktop-portal Screenshot + ScreenCast / PipeWire（Wayland）
+- x11rb（X11 回退）
 - arboard（剪贴板）
 - ksni（系统托盘）
 
@@ -194,84 +196,40 @@ Repository: [github.com/flowinginthewind700/ubuntuscreenshot](https://github.com
 
 ### Features
 
-- **System tray**: camera icon in the top bar — Screenshot, Language, Quit
-- **Multi-monitor**: detects virtual desktop layout (e.g. dual 6000×1440), synced overlay on every display
+- **System tray**: camera icon — Screenshot, Language, Quit
+- **Multi-monitor**: virtual desktop layout (e.g. dual 6000×1440), synced overlay on every display
 - **WeChat-style selection**: semi-transparent mask, live selection, circular magnifier (4× + crosshair)
-- **Locked region editing**: after confirming the selection, annotate directly inside it
+- **Locked region editing**: annotate directly inside the confirmed selection
 - **Annotation tools**: brush, line, rectangle, ellipse, text; adjustable stroke, font size, color
-- **Copy / Save**: copy to clipboard or save via file dialog — no separate preview window
+- **Copy / Save**: clipboard or file dialog — no separate preview window
 
 ### Requirements
 
 | Item | Requirement |
 |------|-------------|
-| OS | Ubuntu 22.04+ / Debian 12+ (other GNOME distros may work) |
+| OS | Ubuntu 22.04+ / Debian 12+ |
 | Session | **GNOME Wayland** (recommended) or X11 |
-| Arch | `x86_64` (current release build target) |
-
-> The prebuilt binary is ~35 MB but still requires the **runtime packages** below (whether you download or build from source).
+| Arch | `x86_64` |
 
 ### Quick Install (Recommended)
 
-**Option 1: .deb package (Recommended)**
-
-1. Download `ubuntuscreenshot_0.1.1_amd64.deb` from [Releases](https://github.com/flowinginthewind700/ubuntuscreenshot/releases)
-2. Install:
+Download **`ubuntuscreenshot_0.2.8_amd64.deb`** from [Releases](https://github.com/flowinginthewind700/ubuntuscreenshot/releases):
 
 ```bash
-sudo dpkg -i ubuntuscreenshot_0.1.1_amd64.deb
-sudo apt-get install -f  # auto-install missing dependencies
+sudo dpkg -i ubuntuscreenshot_0.2.8_amd64.deb
+sudo apt-get install -f
 ```
 
-After installation, launch **Ubuntu Screenshot** from the app menu, then click **Screenshot** from the camera tray icon.
-
-**Option 2: Manual install**
-
-**1. Download**
-
-Get the latest build from [Releases](https://github.com/flowinginthewind700/ubuntuscreenshot/releases):
-
-- `screenshot4ubuntu-x86_64-unknown-linux-gnu.tar.gz` (Linux x86_64)
-
-**2. Install runtime dependencies**
-
-```bash
-sudo apt update
-sudo apt install -y \
-  libxcb1 \
-  libxkbcommon0 \
-  libxkbcommon-x11-0 \
-  xdg-desktop-portal \
-  xdg-desktop-portal-gnome \
-  x11-xserver-utils \
-  zenity \
-  libayatana-appindicator3-1
-```
-
-**3. Extract and run**
-
-```bash
-tar -xzf screenshot4ubuntu-x86_64-unknown-linux-gnu.tar.gz
-chmod +x screenshot4ubuntu
-./screenshot4ubuntu
-```
-
-Optional: install to your user bin directory
-
-```bash
-mkdir -p ~/.local/bin
-cp screenshot4ubuntu ~/.local/bin/
-# ensure ~/.local/bin is on your PATH
-```
+Then launch **Ubuntu Screenshot** from the app menu and click **Screenshot** from the tray camera icon.
 
 ### Usage
 
-1. A **camera icon** appears in the system tray after launch
+1. Camera icon appears in the system tray
 2. Click → **Screenshot**
-3. **Drag** to select a region (works across dual monitors), release to enter edit mode
+3. **Drag** to select (works across dual monitors), release to edit
 4. Use the bottom toolbar; for text, click inside the selection and type (IME supported)
-5. Click **Copy** or **Save**, or press `Ctrl+C` / `Ctrl+S`
-6. Press `Esc` or **Cancel** to discard
+5. **Copy** or **Save**, or `Ctrl+C` / `Ctrl+S`
+6. `Esc` or **Cancel** to discard
 
 #### Keyboard Shortcuts
 
@@ -286,69 +244,71 @@ cp screenshot4ubuntu ~/.local/bin/
 #### Paths & Config
 
 - Default save directory: `~/Pictures/Screenshots/`
-- Language preference: `~/.config/screenshot4ubuntu/language` (`zh` or `en`)
+- Language: `~/.config/screenshot4ubuntu/language` (`zh` or `en`)
+- Debug log: `~/.cache/ubuntuscreenshot/capture.log`
 
-### Build from Source
+### Capture Architecture (v0.2.8)
 
-**Build dependencies** (compile-time only):
-
-```bash
-sudo apt update
-sudo apt install -y \
-  build-essential pkg-config curl \
-  libxkbcommon-dev libwayland-dev libfontconfig-dev libdbus-1-dev \
-  libvulkan-dev libx11-dev libx11-xcb-dev libxcb-render0-dev libxcb-shape0-dev \
-  libxcb-xfixes0-dev libssl-dev \
-  libclang-dev libxcb1-dev libxrandr-dev libegl-dev
+```
+Tray → silent full-screen capture → own overlay (mask / magnifier / selection / annotations)
 ```
 
-With [Rust](https://rustup.rs/) installed:
+| Priority | Method | Notes |
+|----------|--------|-------|
+| 1 | `portal Screenshot` (`interactive=false`) | Silent capture, no GNOME picker UI |
+| 2 | ScreenCast + PipeWire | Fallback when silent capture fails; usually one-time permission |
 
-```bash
-git clone https://github.com/flowinginthewind700/ubuntuscreenshot.git
-cd ubuntuscreenshot
-cargo build --release
-./target/release/screenshot4ubuntu
-```
+Does **not** use `gnome-screenshot` or GNOME's built-in screenshot UI.
 
 ### Runtime Dependencies
 
 | Package | Purpose |
 |---------|---------|
-| `xdg-desktop-portal` + `xdg-desktop-portal-gnome` | ScreenCast portal (same as WeChat/meeting apps) |
-| `pipewire` + `libpipewire-0.3-0` | PipeWire frame capture |
-| `x11-xserver-utils` | `xrandr` for multi-monitor layout |
+| `xdg-desktop-portal` + `xdg-desktop-portal-gnome` | Wayland capture portal |
+| `pipewire` + `libpipewire-0.3-0` | PipeWire fallback capture |
+| `x11-xserver-utils` | `xrandr` multi-monitor layout |
 | `zenity` | Save file dialog |
-| `libayatana-appindicator3-1` | System tray icon |
+| `libayatana-appindicator3-1` | System tray |
 | `libxcb1` / `libxkbcommon*` | GPUI window & input |
 
-**Not required**: `gnome-screenshot`, `wl-clipboard`, Rust / Cargo (compile-time only)
+**Not required**: `gnome-screenshot`, `wl-clipboard`, Rust / Cargo (build-time only)
 
-**Build deps**: `libpipewire-0.3-dev`, `libspa-0.2-dev`
+### Build from Source
 
-On first capture without permission, the system **ScreenCast** dialog appears (same flow as WeChat/meeting apps). After granting access, the app's own overlay opens for region selection and annotation.
+```bash
+sudo apt install -y build-essential pkg-config \
+  libpipewire-0.3-dev libspa-0.2-dev libclang-dev \
+  libxkbcommon-dev libwayland-dev libfontconfig-dev libdbus-1-dev \
+  libvulkan-dev libx11-dev libxcb1-dev libxrandr-dev libegl-dev
+
+git clone https://github.com/flowinginthewind700/ubuntuscreenshot.git
+cd ubuntuscreenshot
+./scripts/run-dev.sh
+```
+
+Build `.deb`:
+
+```bash
+bash scripts/build-deb.sh
+```
 
 ### FAQ
 
-**Tray icon missing**  
-Install `libayatana-appindicator3-1` and ensure GNOME AppIndicator is enabled.
+**Tray icon missing** — Install `libayatana-appindicator3-1`.
 
-**Capture fails / permission required**  
-Allow screen sharing in the system dialog, or enable ubuntuscreenshot under Settings → Privacy → Screen Capture. Install `xdg-desktop-portal-gnome` and verify `echo $XDG_SESSION_TYPE` prints `wayland`.
+**Capture fails** — Enable screen capture for Ubuntu Screenshot under Settings → Apps. Check `~/.cache/ubuntuscreenshot/capture.log`.
 
-**Capture fails / single monitor only**  
-Multi-monitor needs `xrandr`.
+**"Share screen" system dialog** — Silent capture failed; grant permission once, then the app's own overlay should appear.
 
-**Save button does nothing**  
-Install `zenity`.
+**Single monitor only** — Install `x11-xserver-utils` for `xrandr`.
+
+**Save does nothing** — Install `zenity`.
 
 ### Tech Stack
 
 - Rust + GPUI 0.2.2 (`gpui-local`)
-- xdg-desktop-portal / zbus (Wayland capture)
-- x11rb (X11 capture)
-- arboard (clipboard)
-- ksni (system tray)
+- xdg-desktop-portal Screenshot + ScreenCast / PipeWire
+- x11rb, arboard, ksni
 
 ### License
 

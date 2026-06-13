@@ -8,24 +8,24 @@
 
 微信式 GNOME/Wayland 截屏工具：托盘触发、双屏框选、放大镜、选区内标注、复制/保存。
 
-#### 本版亮点（0.2.6）
+#### 本版亮点（0.2.8）
 
-- **推荐安装 `.deb` 包**，依赖自动补齐，从应用菜单启动与命令行体验一致
-- **双层 Wayland 取帧**：优先静默 portal 截全屏 → 直接进入自有 overlay；失败时 PipeWire 回退
-- 修复安装版托盘截屏权限与焦点问题（`app_id`、capture gate）
-- 不依赖 `gnome-screenshot`，不使用 GNOME 自带截屏 UI
+- **文字工具可靠性**：选区顶层透明点击层统一处理单击，单击即可稳定出现输入光标
+- **文字输入流畅**：打字时不再每键重绘全屏截图，双屏下输入明显更顺滑
+- **焦点更稳定**：空文字单击只移动位置，焦点延迟一帧设置，减少「点了没反应」
+- 保留 v0.2.7 双屏主屏修复、放大镜性能优化与 v0.2.6 Wayland 双层取帧
 
 #### 下载
 
 | 文件 | 说明 |
 |------|------|
-| `ubuntuscreenshot_0.2.6_amd64.deb` | **推荐** — Ubuntu/Debian 一键安装 |
+| `ubuntuscreenshot_0.2.8_amd64.deb` | **推荐** — Ubuntu/Debian 一键安装 |
 | `screenshot4ubuntu-x86_64-unknown-linux-gnu.tar.gz` | 预编译二进制 + README |
 
 #### 安装（.deb）
 
 ```bash
-sudo dpkg -i ubuntuscreenshot_0.2.6_amd64.deb
+sudo dpkg -i ubuntuscreenshot_0.2.8_amd64.deb
 sudo apt-get install -f
 ```
 
@@ -45,24 +45,24 @@ sudo apt-get install -f
 
 WeChat-style GNOME/Wayland screenshot tool: tray launcher, dual-monitor selection, magnifier, in-place annotations, copy/save.
 
-#### Highlights (0.2.6)
+#### Highlights (0.2.8)
 
-- **`.deb` package recommended** — auto-installs dependencies; app menu launch matches CLI behavior
-- **Dual-layer Wayland capture**: silent portal screenshot first → own overlay; PipeWire fallback on failure
-- Fixed tray/permission issues for installed builds
-- No `gnome-screenshot` or GNOME built-in screenshot UI
+- **Text tool reliability**: transparent click layer over the selection — single-click cursor placement works consistently
+- **Smoother typing**: no full-screen repaint on every keystroke; much less lag on dual monitors
+- **Stable focus**: empty text relocates in place; deferred focus reduces missed clicks
+- Retains v0.2.7 primary-monitor fix, magnifier performance, and v0.2.6 dual-layer Wayland capture
 
 #### Download
 
 | File | Description |
 |------|-------------|
-| `ubuntuscreenshot_0.2.6_amd64.deb` | **Recommended** — one-click install for Ubuntu/Debian |
+| `ubuntuscreenshot_0.2.8_amd64.deb` | **Recommended** — one-click install for Ubuntu/Debian |
 | `screenshot4ubuntu-x86_64-unknown-linux-gnu.tar.gz` | Prebuilt binary + README |
 
 #### Install (.deb)
 
 ```bash
-sudo dpkg -i ubuntuscreenshot_0.2.6_amd64.deb
+sudo dpkg -i ubuntuscreenshot_0.2.8_amd64.deb
 sudo apt-get install -f
 ```
 

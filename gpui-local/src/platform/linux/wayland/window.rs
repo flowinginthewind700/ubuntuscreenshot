@@ -330,7 +330,7 @@ impl WaylandWindow {
             callbacks: Rc::new(RefCell::new(Callbacks::default())),
         });
 
-        // 副屏须绑定到指定 wl_output 才能显示；主屏 overlay 勿设 display_id 以免误触全屏
+        // 仅副屏（有 display_id / target_output）绑定到指定 wl_output
         if let Some(output) = &target_output {
             toplevel.set_fullscreen(Some(output));
         }

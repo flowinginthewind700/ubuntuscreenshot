@@ -1,8 +1,8 @@
 use gpui::{
-    AnchoredPositionMode, App, Bounds, Context, CursorStyle, Element, ElementId,
+    AnchoredPositionMode, App, Bounds, Context, Element, ElementId,
     ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
-    GlobalElementId, InspectorElementId, KeyBinding, LayoutId, Length, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine, SharedString, Style,
+    GlobalElementId, InspectorElementId, KeyBinding, LayoutId, Length,
+    PaintQuad, Pixels, Point, ShapedLine, SharedString, Style,
     TextRun, UTF16Selection, Window, actions, anchored, div, fill, point, prelude::*,
     px, rgb, size,
 };
@@ -44,7 +44,6 @@ pub struct InlineTextEditor {
     marked_range: Option<Range<usize>>,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
-    is_selecting: bool,
     active: bool,
 }
 
@@ -61,7 +60,6 @@ impl InlineTextEditor {
             marked_range: None,
             last_layout: None,
             last_bounds: None,
-            is_selecting: false,
             active: false,
         }
     }
@@ -78,24 +76,31 @@ impl InlineTextEditor {
         &mut self,
         position: Point<Pixels>,
         color: u32,
+        font_size: f32,
         content: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) {
         self.position = position;
         self.text_color = rgb(color).into();
+        self.font_size = px(font_size);
         self.content = content.into();
         self.selected_range = self.content.len()..self.content.len();
         self.selection_reversed = false;
         self.marked_range = None;
         self.last_layout = None;
         self.last_bounds = None;
-        self.is_selecting = false;
         self.active = true;
         cx.notify();
     }
 
     pub fn set_color(&mut self, color: u32, cx: &mut Context<Self>) {
         self.text_color = rgb(color).into();
+        self.last_layout = None;
+        cx.notify();
+    }
+
+    pub fn set_font_size(&mut self, font_size: f32, cx: &mut Context<Self>) {
+        self.font_size = px(font_size);
         self.last_layout = None;
         cx.notify();
     }
@@ -174,30 +179,6 @@ impl InlineTextEditor {
         cx.notify();
     }
 
-    fn on_mouse_down(
-        &mut self,
-        event: &MouseDownEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.is_selecting = true;
-        if event.modifiers.shift {
-            self.select_to(self.index_for_mouse_position(event.position), cx);
-        } else {
-            self.move_to(self.index_for_mouse_position(event.position), cx);
-        }
-    }
-
-    fn on_mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, _: &mut Context<Self>) {
-        self.is_selecting = false;
-    }
-
-    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.is_selecting {
-            self.select_to(self.index_for_mouse_position(event.position), cx);
-        }
-    }
-
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.selected_range = offset..offset;
         cx.notify();
@@ -209,22 +190,6 @@ impl InlineTextEditor {
         } else {
             self.selected_range.end
         }
-    }
-
-    fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
-        if self.content.is_empty() {
-            return 0;
-        }
-        let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref()) else {
-            return 0;
-        };
-        if position.y < bounds.top() {
-            return 0;
-        }
-        if position.y > bounds.bottom() {
-            return self.content.len();
-        }
-        line.closest_index_for_x(position.x - bounds.left())
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -463,7 +428,7 @@ impl Element for InlineTextElement {
         let editor = self.editor.read(cx);
         let mut style = Style::default();
         style.size.width = Length::Definite(px(480.).into());
-        style.size.height = editor.font_size.into();
+        style.size.height = (editor.font_size * 1.25).into();
         (window.request_layout(style, [], cx), ())
     }
 
@@ -582,6 +547,7 @@ impl Render for InlineTextEditor {
 
         let pos = self.position;
         let focus = self.focus_handle.clone();
+        let line_height = self.font_size * 1.25;
         anchored()
             .position(pos)
             .position_mode(AnchoredPositionMode::Window)
@@ -590,7 +556,6 @@ impl Render for InlineTextEditor {
                     .id("inline-text-editor")
                     .key_context("InlineText")
                     .track_focus(&focus)
-                    .cursor(CursorStyle::IBeam)
                     .text_size(self.font_size)
                     .on_action(cx.listener(Self::backspace))
                     .on_action(cx.listener(Self::delete))
@@ -604,14 +569,9 @@ impl Render for InlineTextEditor {
                     .on_action(cx.listener(Self::paste))
                     .on_action(cx.listener(Self::insert_newline))
                     .on_action(cx.listener(Self::commit_text))
-                    .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
-                    .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
-                    .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-                    .on_mouse_move(cx.listener(Self::on_mouse_move))
                     .child(
                         div()
-                            .min_w(px(120.))
-                            .min_h(self.font_size)
+                            .min_h(line_height)
                             .px_1()
                             .child(InlineTextElement {
                                 editor: cx.entity(),

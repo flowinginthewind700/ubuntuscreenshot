@@ -4817,7 +4817,7 @@ dependencies = [
 
 [[package]]
 name = "screenshot4ubuntu"
-version = "0.2.6"
+version = "0.2.8"
 dependencies = [
  "ab_glyph",
  "anyhow",

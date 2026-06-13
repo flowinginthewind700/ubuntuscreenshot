@@ -1,5 +1,5 @@
 Package: ubuntuscreenshot
-Version: 0.2.6
+Version: 0.2.8
 Section: utils
 Priority: extra
 Architecture: amd64
@@ -19,4 +19,4 @@ Description: Screenshot tool for Ubuntu/GNOME
   - Copy to clipboard or save to file
   - Chinese/English language support
 Depends: libxcb1, libxkbcommon0, libxkbcommon-x11-0, xdg-desktop-portal, xdg-desktop-portal-gnome, x11-xserver-utils, zenity, libayatana-appindicator3-1, pipewire, libpipewire-0.3-0
-Installed-Size: 35896
+Installed-Size: 35916

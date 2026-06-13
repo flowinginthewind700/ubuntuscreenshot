@@ -58,25 +58,88 @@ impl VirtualDesktop {
         self.monitors.iter().find(|m| m.is_primary)
     }
 
-    /// Wayland 下 GPUI 显示器 bounds 通常为各屏本地 (0,0)，按尺寸匹配未占用的输出。
+    /// Wayland 下 GPUI 显示器 bounds 为逻辑像素（已除以 scale），xrandr 为物理像素。
+    pub fn match_display_for_monitor(
+        displays: &[Rc<dyn PlatformDisplay>],
+        monitor: &MonitorRect,
+        used: &HashSet<DisplayId>,
+    ) -> Option<DisplayId> {
+        let target_w = monitor.width as f32;
+        let target_h = monitor.height as f32;
+
+        let mut best: Option<(DisplayId, f32)> = None;
+        for display in displays {
+            if used.contains(&display.id()) {
+                continue;
+            }
+            let b = display.bounds();
+            let lw = f32::from(b.size.width);
+            let lh = f32::from(b.size.height);
+
+            // 直接匹配（scale=1）
+            let mut dist = (lw - target_w).abs() + (lh - target_h).abs();
+            // 分数缩放：逻辑尺寸 * scale ≈ 物理尺寸
+            for scale in [1.25f32, 1.5, 1.75, 2.0, 2.5, 3.0] {
+                let d = (lw * scale - target_w).abs() + (lh * scale - target_h).abs();
+                dist = dist.min(d);
+            }
+
+            if dist < 16.0 {
+                match best {
+                    None => best = Some((display.id(), dist)),
+                    Some((_, bd)) if dist < bd => best = Some((display.id(), dist)),
+                    _ => {}
+                }
+            }
+        }
+
+        if let Some((id, _)) = best {
+            return Some(id);
+        }
+
+        // 主屏兜底：选未占用且尺寸最接近的显示器
+        if monitor.is_primary {
+            return displays
+                .iter()
+                .filter(|d| !used.contains(&d.id()))
+                .min_by(|a, b| {
+                    let score = |d: &Rc<dyn PlatformDisplay>| {
+                        let b = d.bounds();
+                        let lw = f32::from(b.size.width);
+                        let lh = f32::from(b.size.height);
+                        let mut dist = (lw - target_w).abs() + (lh - target_h).abs();
+                        for scale in [1.25f32, 1.5, 1.75, 2.0, 2.5, 3.0] {
+                            let d = (lw * scale - target_w).abs() + (lh * scale - target_h).abs();
+                            dist = dist.min(d);
+                        }
+                        dist
+                    };
+                    score(a)
+                        .partial_cmp(&score(b))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|d| d.id());
+        }
+
+        None
+    }
+
+    /// 按物理像素尺寸匹配（单 scale=1 场景）。
     pub fn match_display_by_size(
         displays: &[Rc<dyn PlatformDisplay>],
         width: f32,
         height: f32,
         used: &HashSet<DisplayId>,
     ) -> Option<DisplayId> {
-        displays
-            .iter()
-            .find(|d| {
-                if used.contains(&d.id()) {
-                    return false;
-                }
-                let b = d.bounds();
-                let bw = f32::from(b.size.width);
-                let bh = f32::from(b.size.height);
-                (bw - width).abs() < 8.0 && (bh - height).abs() < 8.0
-            })
-            .map(|d| d.id())
+        let monitor = MonitorRect {
+            name: String::new(),
+            x: 0,
+            y: 0,
+            width: width as u32,
+            height: height as u32,
+            is_primary: false,
+        };
+        Self::match_display_for_monitor(displays, &monitor, used)
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::desktop_layout::VirtualDesktop;
+use crate::desktop_layout::{MonitorRect, VirtualDesktop};
 use crate::i18n::{self, MessageKey, overlay_status, tool_label, tr, tr_app};
 use crate::image_util::{
     copy_image_to_clipboard, crop_frame, frame_to_gpui_image, prompt_save_png, render_result,
@@ -8,7 +8,7 @@ use crate::model::{
     Annotation, CaptureFrame, Phase, Tool, COLORS, DEFAULT_STROKE, DEFAULT_TEXT_SIZE,
     STROKE_WIDTHS, TEXT_SIZES, stroke_width_label, text_size_label,
 };
-use crate::util::{desktop_app_id, px_val};
+use crate::util::{debug_log, desktop_app_id, px_val};
 use gpui::{
     AnyWindowHandle, App, Bounds, Context, Corners, Entity, FocusHandle, Focusable, Global,
     Hsla, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, PathBuilder, SharedString,
@@ -27,8 +27,9 @@ const MASK: Hsla = Hsla {
 };
 
 const MIN_SELECTION: f32 = 8.0;
-const MAG_SIZE: f32 = 168.0;
-const MAG_ZOOM: f32 = 4.0;
+const MAG_SIZE: f32 = 140.0;
+const MAG_ZOOM: f32 = 2.0;
+const POINTER_REFRESH: Duration = Duration::from_millis(16);
 const ESC_DEBOUNCE: Duration = Duration::from_millis(350);
 
 #[derive(Default)]
@@ -79,6 +80,7 @@ pub struct OverlayCore {
     annotations: Vec<Annotation>,
     status_override: Option<SharedString>,
     editing_text: Option<usize>,
+    editing_window: Option<AnyWindowHandle>,
     inline_text: Entity<InlineTextEditor>,
     locale_bound: bool,
     mouse_position: Option<gpui::Point<gpui::Pixels>>,
@@ -86,6 +88,7 @@ pub struct OverlayCore {
     expected_windows: usize,
     windows_ready: bool,
     ready_at: Option<Instant>,
+    last_pointer_refresh: Option<Instant>,
 }
 
 impl OverlayCore {
@@ -117,6 +120,7 @@ impl OverlayCore {
             annotations: Vec::new(),
             status_override: None,
             editing_text: None,
+            editing_window: None,
             inline_text,
             locale_bound: false,
             mouse_position: None,
@@ -124,18 +128,24 @@ impl OverlayCore {
             expected_windows: 1,
             windows_ready: false,
             ready_at: None,
+            last_pointer_refresh: None,
         }
     }
 
     fn register_window(&mut self, handle: AnyWindowHandle, offset: gpui::Point<gpui::Pixels>) {
-        if !self
+        if self
             .window_handles
             .iter()
             .any(|(h, _)| h.window_id() == handle.window_id())
         {
-            self.window_handles.push((handle, offset));
+            return;
         }
+        self.window_handles.push((handle, offset));
         self.check_windows_ready();
+    }
+
+    fn ensure_window_registered(&mut self, handle: AnyWindowHandle, offset: gpui::Point<gpui::Pixels>) {
+        self.register_window(handle, offset);
     }
 
     fn check_windows_ready(&mut self) {
@@ -162,8 +172,14 @@ impl OverlayCore {
         }
         let w = px_val(window.bounds().size.width);
         let h = px_val(window.bounds().size.height);
+        let scale = window.scale_factor();
         for (mx, my, mw, mh) in &self.monitors {
             if (w - mw).abs() < 4.0 && (h - mh).abs() < 4.0 {
+                return point(px(*mx), px(*my));
+            }
+            let scaled_w = w * scale;
+            let scaled_h = h * scale;
+            if (scaled_w - mw).abs() < 8.0 && (scaled_h - mh).abs() < 8.0 {
                 return point(px(*mx), px(*my));
             }
         }
@@ -174,22 +190,21 @@ impl OverlayCore {
         &self,
         pos: gpui::Point<gpui::Pixels>,
         monitor_offset: gpui::Point<gpui::Pixels>,
+        window: &Window,
     ) -> gpui::Point<gpui::Pixels> {
+        let scale = window.scale_factor();
         if self.multi_window {
             point(
-                px(px_val(pos.x) + px_val(monitor_offset.x)),
-                px(px_val(pos.y) + px_val(monitor_offset.y)),
+                px(px_val(pos.x) * scale + px_val(monitor_offset.x)),
+                px(px_val(pos.y) * scale + px_val(monitor_offset.y)),
             )
         } else {
-            pos
+            point(px(px_val(pos.x) * scale), px(px_val(pos.y) * scale))
         }
     }
 
     fn notify_all_windows(&self, cx: &mut Context<Self>) {
         cx.notify();
-        for (handle, _) in &self.window_handles {
-            let _ = handle.update(cx, |_, window, _| window.refresh());
-        }
     }
 
     fn close_overlay(&mut self, cx: &mut Context<Self>) {
@@ -218,7 +233,8 @@ impl OverlayCore {
             if let Some(Annotation::Text { content: c, .. }) = self.annotations.get_mut(idx) {
                 *c = content;
             }
-            self.notify_all_windows(cx);
+            // 打字时不必刷新整层 overlay（会重绘全屏截图并可能抢焦点），
+            // inline_text 自身的 cx.notify 已足够更新光标。
         }
     }
 
@@ -226,6 +242,7 @@ impl OverlayCore {
         let Some(idx) = self.editing_text.take() else {
             return;
         };
+        self.editing_window = None;
         let content = self.inline_text.read(cx).content().trim().to_string();
         if content.is_empty() {
             self.annotations.remove(idx);
@@ -279,49 +296,104 @@ impl OverlayCore {
     fn start_text_editing(
         &mut self,
         idx: usize,
+        local_pos: gpui::Point<gpui::Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(Annotation::Text {
-            position,
+            position: _,
             content,
             color,
+            size,
             ..
         }) = self.annotations.get(idx).cloned()
         else {
             return;
         };
         self.editing_text = Some(idx);
-        let monitor_offset = self.get_monitor_offset(window);
-        let local_pos = if self.multi_window {
-            point(
-                px(px_val(position.x) - px_val(monitor_offset.x)),
-                px(px_val(position.y) - px_val(monitor_offset.y)),
-            )
-        } else {
-            position
-        };
+        self.editing_window = Some(window.window_handle());
         self.inline_text.update(cx, |editor, cx| {
-            editor.begin_at(local_pos, color, content, cx);
+            editor.begin_at(local_pos, color, size, content, cx);
         });
-        self.inline_text.read(cx).focus_handle(cx).focus(window);
+        window.activate_window();
+        let focus = self.inline_text.read(cx).focus_handle(cx).clone();
+        window.defer(cx, move |window, _| {
+            focus.focus(window);
+        });
+        self.notify_all_windows(cx);
+    }
+
+    fn relocate_empty_text(
+        &mut self,
+        idx: usize,
+        frame_pos: gpui::Point<gpui::Pixels>,
+        local_pos: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(Annotation::Text { color, size, .. }) = self.annotations.get(idx).cloned() else {
+            return;
+        };
+        if let Some(Annotation::Text { position, .. }) = self.annotations.get_mut(idx) {
+            *position = frame_pos;
+        }
+        self.editing_window = Some(window.window_handle());
+        self.inline_text.update(cx, |editor, cx| {
+            editor.begin_at(local_pos, color, size, "", cx);
+        });
+        window.activate_window();
+        let focus = self.inline_text.read(cx).focus_handle(cx).clone();
+        window.defer(cx, move |window, _| {
+            focus.focus(window);
+        });
         self.notify_all_windows(cx);
     }
 
     fn place_new_text(
         &mut self,
-        pos: gpui::Point<gpui::Pixels>,
+        frame_pos: gpui::Point<gpui::Pixels>,
+        local_pos: gpui::Point<gpui::Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let idx = self.annotations.len();
         self.annotations.push(Annotation::Text {
-            position: pos,
+            position: frame_pos,
             content: String::new(),
             color: self.color,
             size: self.text_size,
         });
-        self.start_text_editing(idx, window, cx);
+        self.start_text_editing(idx, local_pos, window, cx);
+    }
+
+    fn handle_text_click(
+        &mut self,
+        clamped: gpui::Point<gpui::Pixels>,
+        local_pos: gpui::Point<gpui::Pixels>,
+        monitor_offset: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(editing_idx) = self.editing_text {
+            let empty = self.inline_text.read(cx).content().trim().is_empty();
+            if empty {
+                self.relocate_empty_text(editing_idx, clamped, local_pos, window, cx);
+                return;
+            }
+            self.commit_text_edit(cx);
+        }
+
+        if let Some(idx) = self.hit_text_at(clamped) {
+            if let Some(Annotation::Text { position, content, .. }) = self.annotations.get(idx) {
+                if !content.trim().is_empty() {
+                    let edit_local = self.frame_to_local(*position, monitor_offset, window);
+                    self.start_text_editing(idx, edit_local, window, cx);
+                    return;
+                }
+            }
+        }
+
+        self.place_new_text(clamped, local_pos, window, cx);
     }
 
     fn set_stroke_width(&mut self, width: f32, cx: &mut Context<Self>) {
@@ -335,6 +407,7 @@ impl OverlayCore {
             if let Some(Annotation::Text { size: s, .. }) = self.annotations.get_mut(idx) {
                 *s = size;
             }
+            self.inline_text.update(cx, |editor, cx| editor.set_font_size(size, cx));
         }
         self.notify_all_windows(cx);
     }
@@ -484,6 +557,23 @@ impl OverlayCore {
         self.notify_all_windows(cx);
     }
 
+    fn frame_to_local(
+        &self,
+        frame_pos: gpui::Point<gpui::Pixels>,
+        monitor_offset: gpui::Point<gpui::Pixels>,
+        window: &Window,
+    ) -> gpui::Point<gpui::Pixels> {
+        let scale = window.scale_factor();
+        if self.multi_window {
+            point(
+                px((px_val(frame_pos.x) - px_val(monitor_offset.x)) / scale),
+                px((px_val(frame_pos.y) - px_val(monitor_offset.y)) / scale),
+            )
+        } else {
+            point(px(px_val(frame_pos.x) / scale), px(px_val(frame_pos.y) / scale))
+        }
+    }
+
     fn handle_mouse_down(
         &mut self,
         ev: &MouseDownEvent,
@@ -493,9 +583,12 @@ impl OverlayCore {
         if ev.button != MouseButton::Left {
             return;
         }
-        window.focus(&self.focus_handle);
         let monitor_offset = self.get_monitor_offset(window);
-        let pos = self.map_pointer(ev.position, monitor_offset);
+        let pos = self.map_pointer(ev.position, monitor_offset, window);
+        let text_click = self.phase == Phase::Editing && self.tool == Tool::Text;
+        if !text_click {
+            window.focus(&self.focus_handle);
+        }
         match self.phase {
             Phase::Selecting => {
                 self.dragging = true;
@@ -506,15 +599,7 @@ impl OverlayCore {
             Phase::Editing => match self.tool {
                 Tool::Text => {
                     let clamped = self.clamp_to_selection(pos);
-                    if let Some(idx) = self.hit_text_at(clamped) {
-                        if self.editing_text != Some(idx) {
-                            self.commit_text_edit(cx);
-                            self.start_text_editing(idx, window, cx);
-                        }
-                    } else {
-                        self.commit_text_edit(cx);
-                        self.place_new_text(clamped, window, cx);
-                    }
+                    self.handle_text_click(clamped, ev.position, monitor_offset, window, cx);
                 }
                 Tool::Line | Tool::Rect | Tool::Ellipse => {
                     self.commit_text_edit(cx);
@@ -545,16 +630,27 @@ impl OverlayCore {
         &mut self,
         ev: &MouseMoveEvent,
         monitor_offset: gpui::Point<gpui::Pixels>,
+        window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let pos = self.map_pointer(ev.position, monitor_offset);
+        let pos = self.map_pointer(ev.position, monitor_offset, window);
         self.mouse_position = Some(pos);
 
         if self.phase == Phase::Selecting {
             if self.dragging {
                 self.selection_end = Some(pos);
+                self.notify_all_windows(cx);
+                return;
             }
-            self.notify_all_windows(cx);
+            let now = Instant::now();
+            let due = self
+                .last_pointer_refresh
+                .map(|t| now.duration_since(t) >= POINTER_REFRESH)
+                .unwrap_or(true);
+            if due {
+                self.last_pointer_refresh = Some(now);
+                self.notify_all_windows(cx);
+            }
             return;
         }
 
@@ -731,34 +827,57 @@ fn toolbar_label(text: impl Into<SharedString>) -> impl IntoElement {
         .child(text.into())
 }
 
-fn annotation_for_window(ann: &Annotation, off_x: f32, off_y: f32) -> Annotation {
+fn annotation_for_window(ann: &Annotation, off_x: f32, off_y: f32, scale: f32) -> Annotation {
     match ann {
         Annotation::Brush { points, color, width } => Annotation::Brush {
             points: points
                 .iter()
-                .map(|p| point(px(px_val(p.x) - off_x), px(px_val(p.y) - off_y)))
+                .map(|p| {
+                    point(
+                        px((px_val(p.x) - off_x) / scale),
+                        px((px_val(p.y) - off_y) / scale),
+                    )
+                })
                 .collect(),
             color: *color,
             width: *width,
         },
         Annotation::Line { from, to, color, width } => Annotation::Line {
-            from: point(px(px_val(from.x) - off_x), px(px_val(from.y) - off_y)),
-            to: point(px(px_val(to.x) - off_x), px(px_val(to.y) - off_y)),
+            from: point(
+                px((px_val(from.x) - off_x) / scale),
+                px((px_val(from.y) - off_y) / scale),
+            ),
+            to: point(
+                px((px_val(to.x) - off_x) / scale),
+                px((px_val(to.y) - off_y) / scale),
+            ),
             color: *color,
             width: *width,
         },
         Annotation::Rect { bounds, color, width } => Annotation::Rect {
             bounds: gpui::bounds(
-                point(px(px_val(bounds.origin.x) - off_x), px(px_val(bounds.origin.y) - off_y)),
-                size(px(px_val(bounds.size.width)), px(px_val(bounds.size.height))),
+                point(
+                    px((px_val(bounds.origin.x) - off_x) / scale),
+                    px((px_val(bounds.origin.y) - off_y) / scale),
+                ),
+                size(
+                    px(px_val(bounds.size.width) / scale),
+                    px(px_val(bounds.size.height) / scale),
+                ),
             ),
             color: *color,
             width: *width,
         },
         Annotation::Ellipse { bounds, color, width } => Annotation::Ellipse {
             bounds: gpui::bounds(
-                point(px(px_val(bounds.origin.x) - off_x), px(px_val(bounds.origin.y) - off_y)),
-                size(px(px_val(bounds.size.width)), px(px_val(bounds.size.height))),
+                point(
+                    px((px_val(bounds.origin.x) - off_x) / scale),
+                    px((px_val(bounds.origin.y) - off_y) / scale),
+                ),
+                size(
+                    px(px_val(bounds.size.width) / scale),
+                    px(px_val(bounds.size.height) / scale),
+                ),
             ),
             color: *color,
             width: *width,
@@ -769,7 +888,10 @@ fn annotation_for_window(ann: &Annotation, off_x: f32, off_y: f32) -> Annotation
             color,
             size,
         } => Annotation::Text {
-            position: point(px(px_val(position.x) - off_x), px(px_val(position.y) - off_y)),
+            position: point(
+                px((px_val(position.x) - off_x) / scale),
+                px((px_val(position.y) - off_y) / scale),
+            ),
             content: content.clone(),
             color: *color,
             size: *size,
@@ -802,7 +924,7 @@ fn action_button(
 impl Render for OverlayCore {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let monitor_offset = self.get_monitor_offset(window);
-        self.register_window(window.window_handle(), monitor_offset);
+        self.ensure_window_registered(window.window_handle(), monitor_offset);
 
         if !self.locale_bound {
             self.locale_bound = true;
@@ -826,6 +948,8 @@ impl Render for OverlayCore {
             .unwrap_or_else(|| overlay_status(lang, phase, tool).into());
         let inline_text = self.inline_text.clone();
         let editing_text = self.editing_text;
+        let editing_window = self.editing_window;
+        let current_window = window.window_handle();
         let frame_w = self.frame.width as f32;
         let frame_h = self.frame.height as f32;
         let mouse_pos = self.mouse_position;
@@ -834,6 +958,7 @@ impl Render for OverlayCore {
         let mon_off_y = px_val(monitor_offset.y);
         let display_w = px_val(window.bounds().size.width);
         let display_h = px_val(window.bounds().size.height);
+        let window_scale = window.scale_factor();
 
         let sel_for_paint = selection;
         let size_label = selection.map(|b| {
@@ -880,17 +1005,21 @@ impl Render for OverlayCore {
                         canvas(
                             move |_, _, _| {},
                             move |bounds, _, window, cx| {
+                                let scale = window.scale_factor();
                                 if let Some(render_image) = gpui_image.use_render_image(window, cx) {
                                     let image_bounds = if multi_win {
                                         Bounds::new(
                                             point(
-                                                bounds.origin.x - px(mon_off_x),
-                                                bounds.origin.y - px(mon_off_y),
+                                                bounds.origin.x - px(mon_off_x / scale),
+                                                bounds.origin.y - px(mon_off_y / scale),
                                             ),
-                                            size(px(frame_w), px(frame_h)),
+                                            size(px(frame_w / scale), px(frame_h / scale)),
                                         )
                                     } else {
-                                        Bounds::new(bounds.origin, size(px(frame_w), px(frame_h)))
+                                        Bounds::new(
+                                            bounds.origin,
+                                            size(px(frame_w / scale), px(frame_h / scale)),
+                                        )
                                     };
                                     let _ = window.paint_image(
                                         image_bounds,
@@ -905,16 +1034,25 @@ impl Render for OverlayCore {
                                     let scaled_sel = if multi_win {
                                         gpui::bounds(
                                             point(
-                                                px(px_val(sel.origin.x) - mon_off_x),
-                                                px(px_val(sel.origin.y) - mon_off_y),
+                                                px((px_val(sel.origin.x) - mon_off_x) / scale),
+                                                px((px_val(sel.origin.y) - mon_off_y) / scale),
                                             ),
                                             size(
-                                                px(px_val(sel.size.width)),
-                                                px(px_val(sel.size.height)),
+                                                px(px_val(sel.size.width) / scale),
+                                                px(px_val(sel.size.height) / scale),
                                             ),
                                         )
                                     } else {
-                                        sel
+                                        gpui::bounds(
+                                            point(
+                                                px(px_val(sel.origin.x) / scale),
+                                                px(px_val(sel.origin.y) / scale),
+                                            ),
+                                            size(
+                                                px(px_val(sel.size.width) / scale),
+                                                px(px_val(sel.size.height) / scale),
+                                            ),
+                                        )
                                     };
 
                                     let top = Bounds::new(
@@ -984,9 +1122,9 @@ impl Render for OverlayCore {
                                         continue;
                                     }
                                     let scaled = if multi_win {
-                                        annotation_for_window(ann, mon_off_x, mon_off_y)
+                                        annotation_for_window(ann, mon_off_x, mon_off_y, scale)
                                     } else {
-                                        ann.clone()
+                                        annotation_for_window(ann, 0.0, 0.0, scale)
                                     };
                                     OverlayCore::paint_annotation(window, cx, &scaled);
                                 }
@@ -999,7 +1137,7 @@ impl Render for OverlayCore {
                     }))
                     .on_mouse_move(cx.listener(|this, ev, window, cx| {
                         let offset = this.get_monitor_offset(window);
-                        this.handle_mouse_move(ev, offset, cx);
+                        this.handle_mouse_move(ev, offset, window, cx);
                     }))
                     .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
                         this.handle_mouse_up(cx);
@@ -1009,8 +1147,8 @@ impl Render for OverlayCore {
                 let pos = mouse_pos.unwrap();
                 let pos_x = px_val(pos.x);
                 let pos_y = px_val(pos.y);
-                let local_x = pos_x - mon_off_x;
-                let local_y = pos_y - mon_off_y;
+                let local_x = (pos_x - mon_off_x) / window_scale;
+                let local_y = (pos_y - mon_off_y) / window_scale;
                 if multi_win
                     && (local_x < 0.0
                         || local_y < 0.0
@@ -1206,7 +1344,7 @@ impl Render for OverlayCore {
                                             t.commit_text_edit(cx);
                                         }
                                         t.tool = Tool::Text;
-                                        cx.notify();
+                                        t.notify_all_windows(cx);
                                     }),
                                 ))
                                 .child(
@@ -1347,7 +1485,64 @@ impl Render for OverlayCore {
                         }),
                 )
             })
-            .child(inline_text)
+            .when(
+                editing_text.is_none()
+                    || !multi_win
+                    || editing_window.is_some_and(|h| h.window_id() == current_window.window_id()),
+                |this| this.child(inline_text),
+            )
+            .when(tool == Tool::Text && phase == Phase::Editing, |this| {
+                if let Some(sel) = sel_for_paint {
+                    let scale = window_scale;
+                    let scaled_sel = if multi_win {
+                        gpui::bounds(
+                            point(
+                                px((px_val(sel.origin.x) - mon_off_x) / scale),
+                                px((px_val(sel.origin.y) - mon_off_y) / scale),
+                            ),
+                            size(
+                                px(px_val(sel.size.width) / scale),
+                                px(px_val(sel.size.height) / scale),
+                            ),
+                        )
+                    } else {
+                        gpui::bounds(
+                            point(
+                                px(px_val(sel.origin.x) / scale),
+                                px(px_val(sel.origin.y) / scale),
+                            ),
+                            size(
+                                px(px_val(sel.size.width) / scale),
+                                px(px_val(sel.size.height) / scale),
+                            ),
+                        )
+                    };
+                    this.child(
+                        div()
+                            .absolute()
+                            .left(scaled_sel.origin.x)
+                            .top(scaled_sel.origin.y)
+                            .w(scaled_sel.size.width)
+                            .h(scaled_sel.size.height)
+                            .occlude()
+                            .cursor(gpui::CursorStyle::IBeam)
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                                let monitor_offset = this.get_monitor_offset(window);
+                                let pos = this.map_pointer(ev.position, monitor_offset, window);
+                                let clamped = this.clamp_to_selection(pos);
+                                this.handle_text_click(
+                                    clamped,
+                                    ev.position,
+                                    monitor_offset,
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    )
+                } else {
+                    this
+                }
+            })
     }
 }
 
@@ -1384,6 +1579,7 @@ pub fn close_any_active_overlay(cx: &mut App) {
 #[derive(Clone)]
 struct MonitorOpenSpec {
     index: usize,
+    name: String,
     x: f32,
     y: f32,
     width: f32,
@@ -1401,15 +1597,34 @@ fn open_monitor_window(
     used_displays: &mut std::collections::HashSet<gpui::DisplayId>,
     focus: bool,
 ) -> bool {
+    // Wayland 多屏：仅副屏绑定 display_id（须挂到对应 wl_output 才能显示）。
+    // 主屏勿设 display_id，否则 GPUI 会 set_fullscreen 导致鼠标/框选失效（见 wayland/window.rs）。
+    // 主屏用 Windowed + GPUI 逻辑分辨率，兼容 2x 分数缩放。
     let (window_bounds, display_id) = if wayland && multi && !spec.is_primary {
-        let display_id = VirtualDesktop::match_display_by_size(
+        let monitor = MonitorRect {
+            name: spec.name.clone(),
+            x: spec.x as i32,
+            y: spec.y as i32,
+            width: spec.width as u32,
+            height: spec.height as u32,
+            is_primary: false,
+        };
+        let display_id = VirtualDesktop::match_display_for_monitor(
             displays,
-            spec.width,
-            spec.height,
+            &monitor,
             used_displays,
         );
         if let Some(id) = display_id {
             used_displays.insert(id);
+            debug_log(&format!(
+                "overlay: monitor {} ({}) -> display_id {:?}",
+                spec.index, spec.name, id
+            ));
+        } else {
+            debug_log(&format!(
+                "overlay: monitor {} ({}) 未匹配 display_id",
+                spec.index, spec.name
+            ));
         }
         (
             Bounds::new(
@@ -1418,6 +1633,35 @@ fn open_monitor_window(
             ),
             display_id,
         )
+    } else if wayland && multi && spec.is_primary {
+        let monitor = MonitorRect {
+            name: spec.name.clone(),
+            x: spec.x as i32,
+            y: spec.y as i32,
+            width: spec.width as u32,
+            height: spec.height as u32,
+            is_primary: true,
+        };
+        let logical = VirtualDesktop::match_display_for_monitor(
+            displays,
+            &monitor,
+            &std::collections::HashSet::new(),
+        )
+        .and_then(|id| displays.iter().find(|d| d.id() == id).map(|d| d.bounds()));
+        let bounds = logical.unwrap_or_else(|| {
+            Bounds::new(
+                point(px(spec.x), px(spec.y)),
+                size(px(spec.width), px(spec.height)),
+            )
+        });
+        debug_log(&format!(
+            "overlay: primary {} ({}) windowed {:?}x{:?}",
+            spec.index,
+            spec.name,
+            bounds.size.width,
+            bounds.size.height
+        ));
+        (bounds, None)
     } else {
         (
             Bounds::new(
@@ -1431,14 +1675,18 @@ fn open_monitor_window(
     let monitor_offset = point(px(spec.x), px(spec.y));
     let entity_ref = entity.clone();
 
+    let bounds_kind = if wayland && multi && spec.is_primary {
+        WindowBounds::Windowed(window_bounds)
+    } else if wayland {
+        WindowBounds::Fullscreen(window_bounds)
+    } else {
+        WindowBounds::Windowed(window_bounds)
+    };
+
     cx.open_window(
         WindowOptions {
             titlebar: None,
-            window_bounds: Some(if wayland {
-                WindowBounds::Fullscreen(window_bounds)
-            } else {
-                WindowBounds::Windowed(window_bounds)
-            }),
+            window_bounds: Some(bounds_kind),
             window_decorations: None,
             window_background: WindowBackgroundAppearance::Opaque,
             // PopUp 在 X11 下会被标记为 _NET_WM_WINDOW_TYPE_NOTIFICATION，
@@ -1525,13 +1773,21 @@ pub fn open_overlay(frame: CaptureFrame, cx: &mut App) {
     let specs: Vec<MonitorOpenSpec> = monitors
         .iter()
         .enumerate()
-        .map(|(i, (mx, my, mw, mh, is_primary))| MonitorOpenSpec {
-            index: i,
-            x: *mx,
-            y: *my,
-            width: *mw,
-            height: *mh,
-            is_primary: *is_primary,
+        .map(|(i, (mx, my, mw, mh, is_primary))| {
+            let name = layout
+                .as_ref()
+                .and_then(|l| l.monitors.get(i))
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| format!("monitor-{i}"));
+            MonitorOpenSpec {
+                index: i,
+                name,
+                x: *mx,
+                y: *my,
+                width: *mw,
+                height: *mh,
+                is_primary: *is_primary,
+            }
         })
         .collect();
 
@@ -1549,6 +1805,7 @@ pub fn open_overlay(frame: CaptureFrame, cx: &mut App) {
     cx.update_global::<CaptureInProgress, _>(|busy, _| busy.0 = false);
     cx.update_global::<CaptureBusy, _>(|state, _| *state = CaptureBusy::default());
 
+    let mut used_displays = std::collections::HashSet::new();
     let primaries: Vec<_> = specs
         .iter()
         .filter(|s| !wayland || !multi || s.is_primary)
@@ -1560,7 +1817,6 @@ pub fn open_overlay(frame: CaptureFrame, cx: &mut App) {
         .cloned()
         .collect();
 
-    let mut used_displays = std::collections::HashSet::new();
     for (i, spec) in primaries.iter().enumerate() {
         open_monitor_window(
             cx,
@@ -1580,7 +1836,7 @@ pub fn open_overlay(frame: CaptureFrame, cx: &mut App) {
         return;
     }
 
-    // 副屏晚一帧再开，避免与主屏 configure 竞态导致主屏偶发不显示
+    // 副屏晚一帧再开，避免与主屏 configure 竞态导致主屏鼠标事件失效
     let entity_deferred = entity.clone();
     cx.defer(move |cx| {
         let displays = cx.displays();
@@ -1597,9 +1853,7 @@ pub fn open_overlay(frame: CaptureFrame, cx: &mut App) {
                 false,
             );
         }
-        let _ = entity_deferred.update(cx, |overlay, cx| {
-            overlay.mark_windows_ready(cx);
-        });
+        let _ = entity_deferred.update(cx, |overlay, cx| overlay.mark_windows_ready(cx));
         cx.activate(true);
     });
 }

@@ -1,6 +1,6 @@
 [package]
 name = "screenshot4ubuntu"
-version = "0.2.6"
+version = "0.2.8"
 edition = "2024"
 description = "WeChat-style screenshot tool for Ubuntu/GNOME, built with GPUI"
 license = "MIT"
